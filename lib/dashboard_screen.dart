@@ -1,7 +1,6 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:medical_dashboard/power_bi_api.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:http/http.dart' as http;
 import 'main.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -30,6 +29,8 @@ class _DashboardScreenState extends State<DashboardScreen>
   late Animation<double> _aptAnimation;
   late Animation<double> _rxAnimation;
 
+  late final PowerBIPushService _powerBIPushService;
+
   @override
   void initState() {
     super.initState();
@@ -43,6 +44,15 @@ class _DashboardScreenState extends State<DashboardScreen>
 
     _rxAnimation = Tween<double>(begin: 0, end: _rxCount.toDouble()).animate(
       CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
+    );
+
+    _powerBIPushService = PowerBIPushService(
+      aptCtrl: _aptCtrl,
+      rxCtrl: _rxCtrl,
+      setStateCallback: () => setState(() {}),
+      reloadWebView: () {
+        if (_hasEmbed) _webViewController.reload();
+      },
     );
 
     if (_hasEmbed) {
@@ -59,64 +69,14 @@ class _DashboardScreenState extends State<DashboardScreen>
     super.dispose();
   }
 
-  Future<void> _pushAppointment() async {
-    final value = _safeParse(_aptCtrl.text);
-    setState(() => _aptCount = value);
-    _aptAnimation = Tween<double>(begin: 0, end: value.toDouble()).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
-    );
-    _animationController.forward(from: 0);
-    await _pushToPowerBI(APPOINTMENT_PUSH_URL, [
-      {"appointments_today": value}
-    ]);
-  }
-
-  Future<void> _pushPrescription() async {
-    final value = _safeParse(_rxCtrl.text);
-    setState(() => _rxCount = value);
-    _rxAnimation = Tween<double>(begin: 0, end: value.toDouble()).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
-    );
-    _animationController.forward(from: 0);
-    await _pushToPowerBI(PRESCRIPTION_PUSH_URL, [
-      {"prescriptions_today": value}
-    ]);
-  }
-
-  Future<void> _pushToPowerBI(
-      String url, List<Map<String, dynamic>> rows) async {
-    setState(() => _pushing = true);
-    try {
-      final res = await http.post(
-        Uri.parse(url),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode(rows),
-      );
-
-      if (res.statusCode == 200) {
-        setState(() => _lastMessage = '✅ Updated successfully');
-        if (_hasEmbed) _webViewController.reload();
-      } else {
-        setState(() => _lastMessage = '❌ Failed: HTTP ${res.statusCode}');
-      }
-    } catch (e) {
-      setState(() => _lastMessage = '❌ Error: $e');
-    } finally {
-      setState(() => _pushing = false);
-    }
-  }
-
-  int _safeParse(String s) => int.tryParse(s.trim()) ?? 0;
-
   void _increment(TextEditingController c) {
-    final v = _safeParse(c.text) + 1;
-    c.text = v.toString();
+    final v = int.tryParse(c.text.trim()) ?? 0;
+    c.text = (v + 1).toString();
   }
 
   void _decrement(TextEditingController c) {
-    final cur = _safeParse(c.text);
-    final v = cur > 0 ? cur - 1 : 0;
-    c.text = v.toString();
+    final cur = int.tryParse(c.text.trim()) ?? 0;
+    c.text = (cur > 0 ? cur - 1 : 0).toString();
   }
 
   Widget _buildCounterCard({
@@ -192,13 +152,11 @@ class _DashboardScreenState extends State<DashboardScreen>
                   children: [
                     IconButton(
                       onPressed: () => _increment(controller),
-                      icon: const Icon(Icons.keyboard_arrow_up,
-                          color: Colors.white),
+                      icon: const Icon(Icons.keyboard_arrow_up, color: Colors.white),
                     ),
                     IconButton(
                       onPressed: () => _decrement(controller),
-                      icon: const Icon(Icons.keyboard_arrow_down,
-                          color: Colors.white),
+                      icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white),
                     ),
                   ],
                 ),
@@ -232,7 +190,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             color: Colors.blueAccent,
             value: _aptCount,
             controller: _aptCtrl,
-            onPush: _pushAppointment,
+            onPush: _powerBIPushService.pushAppointment,
             animation: _aptAnimation,
           ),
           const SizedBox(height: 16),
@@ -241,13 +199,12 @@ class _DashboardScreenState extends State<DashboardScreen>
             color: Colors.greenAccent,
             value: _rxCount,
             controller: _rxCtrl,
-            onPush: _pushPrescription,
+            onPush: _powerBIPushService.pushPrescription,
             animation: _rxAnimation,
           ),
           if (_lastMessage != null) ...[
             const SizedBox(height: 12),
-            Text(_lastMessage!,
-                style: const TextStyle(fontSize: 14, color: Colors.white70)),
+            Text(_lastMessage!, style: const TextStyle(fontSize: 14, color: Colors.white70)),
           ],
           const SizedBox(height: 20),
           if (_hasEmbed)
@@ -261,10 +218,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                 borderRadius: BorderRadius.circular(16),
                 child: WebViewWidget(controller: _webViewController),
               ),
-            )
-          else
-
-            _EmbedHelpCard(),
+            ),
         ],
       ),
     );
@@ -283,35 +237,6 @@ class _DashboardScreenState extends State<DashboardScreen>
         ],
       ),
       body: body,
-    );
-  }
-}
-
-
-class _EmbedHelpCard extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      color: Colors.black26,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
-            Text('Add your Power BI embed URL',
-                style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white)),
-            SizedBox(height: 8),
-            Text(
-              'Paste your Power BI Embed URL into POWER_BI_EMBED_URL to see the live dashboard.',
-              style: TextStyle(color: Colors.white70),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
